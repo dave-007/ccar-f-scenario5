@@ -75,7 +75,7 @@ jobs:
             echo
             jq -r '"**Verdict:** " + .verdict + "\n\n" + .summary' review.json 2>/dev/null || echo "_(comment step couldn't parse review.json — isolating the gate step's behavior for this demo)_"
             echo
-            jq -r '.issues[] | "- **[" + .severity + "]** `" + .file + "`: " + .description' review.json 2>/dev/null
+            jq -r '.issues[] | "- **[" + .severity + "]** `" + .file + "`: " + .description' review.json 2>/dev/null || true
             echo
             echo "### Suggested tests"
             echo
