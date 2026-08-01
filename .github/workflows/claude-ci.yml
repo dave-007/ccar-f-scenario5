@@ -34,40 +34,15 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          set -euo pipefail
-          claude --bare -p "$(cat <<'PROMPT'
-          Read pr.diff in the current directory. It is a git diff for a pull request.
-          Review it for bugs, logic errors, and security issues.
+          # DEMO FAULT INJECTION (redteam/fail-open-repro) — not a real change.
+          # Fabricates a malformed, fenced response and uses the ORIGINAL naive
+          # extraction (no validation) to deterministically reproduce the fail-open
+          # bug, instead of depending on the live model happening to add fences.
+          cat > raw_review.json <<'EOF'
+          {"result": "```json\n{\"verdict\": \"block\", \"summary\": \"fabricated: this should have blocked the build\"}\n```"}
+          EOF
 
-          Respond with ONLY valid JSON (no markdown fences) matching this schema:
-          {"verdict": "pass" | "block", "summary": string, "issues": [{"file": string, "description": string, "severity": "low" | "medium" | "high"}]}
-          PROMPT
-          )" \
-            --output-format json \
-            --allowedTools "Read" \
-            --disallowedTools "Bash,Write,Edit" \
-            --permission-mode dontAsk \
-            > raw_review.json
-
-          jq -r '.result' raw_review.json > result.txt
-
-          # The model sometimes wraps JSON in ```json fences despite being told not to.
-          # Strip a fence ONLY if it anchors the very start/end of the response — never
-          # mid-string — so a fence-like line embedded in prose (e.g. a description that
-          # quotes markdown) can't get deleted and corrupt the JSON. Then validate the
-          # verdict explicitly and fail the step (fail CLOSED) on anything else, rather
-          # than letting a parse error silently fall through as an empty/missing verdict.
-          python3 - <<'PY'
-          import json, re
-          text = open("result.txt").read()
-          text = re.sub(r"^\s*```(?:json)?\s*\n", "", text)
-          text = re.sub(r"\n\s*```\s*$", "", text)
-          data = json.loads(text)
-          if data.get("verdict") not in ("pass", "block"):
-              raise ValueError(f"unexpected or missing verdict: {data.get('verdict')!r}")
-          with open("review.json", "w") as f:
-              json.dump(data, f)
-          PY
+          jq -r '.result' raw_review.json > review.json
           cat review.json
 
       - name: Gate on verdict
@@ -95,11 +70,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
           {
             echo "## Claude Code Review"
             echo
-            jq -r '"**Verdict:** " + .verdict + "\n\n" + .summary' review.json
+            jq -r '"**Verdict:** " + .verdict + "\n\n" + .summary' review.json 2>/dev/null || echo "_(comment step couldn't parse review.json — isolating the gate step's behavior for this demo)_"
             echo
             jq -r '.issues[] | "- **[" + .severity + "]** `" + .file + "`: " + .description' review.json 2>/dev/null
             echo
