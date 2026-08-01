@@ -48,7 +48,10 @@ jobs:
             --permission-mode dontAsk \
             > raw_review.json
 
-          jq -r '.result' raw_review.json > review.json
+          # The model sometimes wraps JSON in ```json fences despite being told not
+          # to — asking nicely in the prompt doesn't guarantee compliance, so strip
+          # any fence lines defensively before parsing.
+          jq -r '.result' raw_review.json | sed '/^```/d' > review.json
           cat review.json
 
       - name: Gate on verdict
