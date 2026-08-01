@@ -1,4 +1,8 @@
-from app.pricing import Item, calculate_subtotal, calculate_total
+from app.pricing import Item, apply_flat_discount, calculate_subtotal, calculate_total
+
+
+def test_apply_flat_discount():
+    assert apply_flat_discount(50.0, 10.0) == 40.0
 
 
 def test_calculate_subtotal_single_item():

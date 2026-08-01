@@ -56,6 +56,21 @@ The workflow runs in this order:
 5. **Fail the build** (`exit 1`) if the verdict was `block` — this is what
    actually gates the PR, not just informs it
 
+## Known limitation: the gate can edit itself
+
+Because this uses the `pull_request` trigger (not `pull_request_target`), GitHub
+reads the workflow file **from the PR's own head branch**, not from `main`. That
+means a PR can modify `.github/workflows/claude-ci.yml` and have its own review
+logic evaluate itself in the same run — confirmed live: PR #1 in this repo did
+exactly that, and Claude's own review flagged it as a medium-severity finding.
+
+The "correct" fix is `pull_request_target`, which pins the workflow file to the
+base branch — but that trigger runs with base-branch secrets available even for
+untrusted forks, which is a well-known way to leak secrets if you're not careful
+about what gets checked out and executed. Retrofitting that safely is out of
+scope for this demo; for a real team repo, workflow file changes should require
+a human reviewer regardless of what the automated verdict says.
+
 ## Try it
 
 ```bash

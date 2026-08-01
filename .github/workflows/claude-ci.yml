@@ -34,6 +34,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          set -euo pipefail
           claude --bare -p "$(cat <<'PROMPT'
           Read pr.diff in the current directory. It is a git diff for a pull request.
           Review it for bugs, logic errors, and security issues.
@@ -48,7 +49,25 @@ jobs:
             --permission-mode dontAsk \
             > raw_review.json
 
-          jq -r '.result' raw_review.json > review.json
+          jq -r '.result' raw_review.json > result.txt
+
+          # The model sometimes wraps JSON in ```json fences despite being told not to.
+          # Strip a fence ONLY if it anchors the very start/end of the response — never
+          # mid-string — so a fence-like line embedded in prose (e.g. a description that
+          # quotes markdown) can't get deleted and corrupt the JSON. Then validate the
+          # verdict explicitly and fail the step (fail CLOSED) on anything else, rather
+          # than letting a parse error silently fall through as an empty/missing verdict.
+          python3 - <<'PY'
+          import json, re
+          text = open("result.txt").read()
+          text = re.sub(r"^\s*```(?:json)?\s*\n", "", text)
+          text = re.sub(r"\n\s*```\s*$", "", text)
+          data = json.loads(text)
+          if data.get("verdict") not in ("pass", "block"):
+              raise ValueError(f"unexpected or missing verdict: {data.get('verdict')!r}")
+          with open("review.json", "w") as f:
+              json.dump(data, f)
+          PY
           cat review.json
 
       - name: Gate on verdict
@@ -60,6 +79,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          set -euo pipefail
           claude --bare -p "Read pr.diff. Suggest additional pytest test cases that would
           catch regressions in the changed logic. Output only a fenced python code block,
           nothing else." \
@@ -75,6 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           {
             echo "## Claude Code Review"
             echo
