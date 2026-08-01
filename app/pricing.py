@@ -20,6 +20,10 @@ def bulk_discount_rate(total_quantity: int) -> float:
     return 0.0
 
 
+def apply_flat_discount(total: float, discount_amount: float) -> float:
+    return max(0.0, total - discount_amount)
+
+
 def calculate_total(items: list[Item], tax_rate: float) -> float:
     subtotal = calculate_subtotal(items)
     taxed = subtotal * (1 + tax_rate)
