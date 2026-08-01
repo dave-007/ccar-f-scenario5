@@ -1,0 +1,96 @@
+name: Claude Code CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      - name: Get PR diff
+        run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+
+      # --bare skips auto-discovery of hooks/skills/plugins/MCP servers/CLAUDE.md
+      # so the review can't be silently altered by repo or local config.
+      # --permission-mode dontAsk auto-denies anything not explicitly allowed —
+      # left at "default" this would hang forever waiting for a TTY that CI doesn't have.
+      - name: Code review (structured JSON verdict)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude --bare -p "$(cat <<'PROMPT'
+          Read pr.diff in the current directory. It is a git diff for a pull request.
+          Review it for bugs, logic errors, and security issues.
+
+          Respond with ONLY valid JSON (no markdown fences) matching this schema:
+          {"verdict": "pass" | "block", "summary": string, "issues": [{"file": string, "description": string, "severity": "low" | "medium" | "high"}]}
+          PROMPT
+          )" \
+            --output-format json \
+            --allowedTools "Read" \
+            --disallowedTools "Bash,Write,Edit" \
+            --permission-mode dontAsk \
+            > raw_review.json
+
+          jq -r '.result' raw_review.json > review.json
+          cat review.json
+
+      - name: Gate on verdict
+        id: gate
+        run: echo "verdict=$(jq -r '.verdict' review.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate suggested tests
+        if: steps.gate.outputs.verdict == 'pass'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude --bare -p "Read pr.diff. Suggest additional pytest test cases that would
+          catch regressions in the changed logic. Output only a fenced python code block,
+          nothing else." \
+            --output-format json \
+            --allowedTools "Read" \
+            --disallowedTools "Bash,Write,Edit" \
+            --permission-mode dontAsk \
+            > raw_tests.json
+
+          jq -r '.result' raw_tests.json > suggested_tests.md
+
+      - name: Post PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Claude Code Review"
+            echo
+            jq -r '"**Verdict:** " + .verdict + "\n\n" + .summary' review.json
+            echo
+            jq -r '.issues[] | "- **[" + .severity + "]** `" + .file + "`: " + .description' review.json 2>/dev/null
+            echo
+            echo "### Suggested tests"
+            echo
+            if [ -f suggested_tests.md ]; then cat suggested_tests.md; else echo "_skipped — review blocked_"; fi
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+
+      - name: Fail build if review blocked the PR
+        run: |
+          if [ "${{ steps.gate.outputs.verdict }}" = "block" ]; then
+            echo "Claude review verdict was 'block' — see PR comment for details."
+            exit 1
+          fi
