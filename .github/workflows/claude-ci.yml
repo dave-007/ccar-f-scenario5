@@ -34,15 +34,26 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          # DEMO FAULT INJECTION (redteam/fail-open-repro) — not a real change.
-          # Fabricates a malformed, fenced response and uses the ORIGINAL naive
-          # extraction (no validation) to deterministically reproduce the fail-open
-          # bug, instead of depending on the live model happening to add fences.
+          # DEMO FAULT INJECTION, part 2 (redteam/fail-open-repro) — not a real change.
+          # SAME fabricated fenced response as the first commit, but now run through
+          # the real fail-closed extraction logic. Only variable changed: the parser.
           cat > raw_review.json <<'EOF'
           {"result": "```json\n{\"verdict\": \"block\", \"summary\": \"fabricated: this should have blocked the build\"}\n```"}
           EOF
 
-          jq -r '.result' raw_review.json > review.json
+          jq -r '.result' raw_review.json > result.txt
+
+          python3 - <<'PY'
+          import json, re
+          text = open("result.txt").read()
+          text = re.sub(r"^\s*```(?:json)?\s*\n", "", text)
+          text = re.sub(r"\n\s*```\s*$", "", text)
+          data = json.loads(text)
+          if data.get("verdict") not in ("pass", "block"):
+              raise ValueError(f"unexpected or missing verdict: {data.get('verdict')!r}")
+          with open("review.json", "w") as f:
+              json.dump(data, f)
+          PY
           cat review.json
 
       - name: Gate on verdict
